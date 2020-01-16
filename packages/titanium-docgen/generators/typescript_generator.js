@@ -342,7 +342,7 @@ class GlobalTemplateWriter {
 		this.output += '// Definitions by: Axway Appcelerator <https://github.com/appcelerator>\n';
 		this.output += '//                 Jan Vennemann <https://github.com/janvennemann>\n';
 		this.output += '//                 Sergey Volkov <https://github.com/drauggres>\n';
-		this.output += '// Definitions: https://github.com/DefinitelyTyped/DefinitelyTyped\n';
+		this.output += '// Definitions: https://github.com/TiStrong/types\n';
 		this.output += '// TypeScript Version: 3.0\n';
 		this.output += '\n';
 		this.output += 'type _Omit<T, K extends keyof any | undefined> = Pick<T, Exclude<keyof T, K>>;\n';
