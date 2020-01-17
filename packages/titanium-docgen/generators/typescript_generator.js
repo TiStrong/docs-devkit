@@ -1,5 +1,6 @@
 'use strict';
 const common = require('../lib/common.js');
+const path = require('path');
 
 /*
  * Map of invalid types and their replacement
@@ -130,6 +131,10 @@ class DocsParser {
 			}
 
 			const typeInfo = this.apis[fullyQualifiedTypeName];
+			if (typeInfo.__file.indexOf(path.join('apidoc', 'Modules')) !== -1) {
+				// skip bundled documentation for modules
+				return;
+			}
 			const namespaceParts = typeInfo.name.split('.');
 			namespaceParts.pop();
 			if (skipApis.includes(typeInfo.name)) {
@@ -713,6 +718,12 @@ class VariableNode {
 			this.type = variableDoc.type;
 		}
 		this.summary = variableDoc.summary ? variableDoc.summary.trim() : '';
+		if (variableDoc.deprecated) {
+			this.summary += '\n@deprecated';
+			if (variableDoc.deprecated.notes) {
+				this.summary += ' ' + variableDoc.deprecated.notes;
+			}
+		}
 		this.isConstant = variableDoc.permission === 'read-only';
 		this.optional = variableDoc.optional;
 		this.rest = variableDoc.rest || false;
@@ -746,6 +757,12 @@ class FunctionNode {
 		this.parameters = [];
 		this.parseParameters(functionDoc.parameters);
 		this.summary = functionDoc.summary ? functionDoc.summary.trim() : '';
+		if (functionDoc.deprecated) {
+			this.summary += '\n@deprecated';
+			if (functionDoc.deprecated.notes) {
+				this.summary += ' ' + functionDoc.deprecated.notes;
+			}
+		}
 		this.optional = functionDoc.optional || false;
 	}
 
@@ -962,9 +979,15 @@ class NamespaceNode extends MemberNode {
 	}
 	init() {
 		const moduleDoc = this.api;
-		this.summary = moduleDoc.summary.trim();
+		this.summary = moduleDoc.summary ? moduleDoc.summary.trim() : '';
 
-		this.removed = moduleDoc.deprecated && moduleDoc.deprecated.removed;
+		if (moduleDoc.deprecated && moduleDoc.deprecated.removed) {
+			this.removed = true;
+			this.summary += '\n@deprecated';
+			if (moduleDoc.deprecated.notes) {
+				this.summary += ' ' + moduleDoc.deprecated.notes;
+			}
+		}
 		if (this.relatedNode) {
 			if ((!this.interfaces.length && !this.namespaces.length && !isConstantsOnlyProxy(moduleDoc)) || this.removed) {
 				this.relatedNode.relatedNode = null;
@@ -1039,11 +1062,12 @@ class InterfaceNode extends MemberNode {
 	}
 	init() {
 		const typeDoc = this.api;
-		if (typeDoc.summary) {
-			this.summary = typeDoc.summary.trim();
-		}
-		if (this.removed && typeDoc.deprecated.notes) {
-			this.summary += '\n' + typeDoc.deprecated.notes;
+		this.summary = typeDoc.summary ? typeDoc.summary.trim() : '';
+		if (typeDoc.deprecated) {
+			this.summary += '\n@deprecated';
+			if (typeDoc.deprecated.notes) {
+				this.summary += ' ' + typeDoc.deprecated.notes;
+			}
 		}
 		if (typeDoc.extends && this.name !== 'Titanium') {
 			this.extends = typeDoc.extends;
