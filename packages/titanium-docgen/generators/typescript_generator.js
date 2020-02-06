@@ -19,14 +19,14 @@ const skipApis = [
 ];
 
 // List of modules that need to be generated as an interface instead of a namespace.
-const knowInterfacesList = [
+const forcedInterfaces = [
 	'Titanium.App.iOS.UserDefaults',
 	'Global.String',
 	'Global.JSON',
 	'Global.console'
 ];
 
-const eventsMethodsList = [
+const eventsMethods = [
 	'addEventListener',
 	'removeEventListener',
 	'fireEvent'
@@ -100,6 +100,21 @@ function sortByName(a, b) {
 }
 
 /**
+ * @param {MemberNode} a API node
+ * @param {MemberNode} b API node
+ * @return {number}
+ */
+function sortByFQN(a, b) {
+	if (a.fullyQualifiedName > b.fullyQualifiedName) {
+		return 1;
+	}
+	if (a.fullyQualifiedName < b.fullyQualifiedName) {
+		return -1;
+	}
+	return 1;
+}
+
+/**
  * Parses the prepared API type docs and creates a syntax tree that can be used
  * to generate a TypeScript type definition file.
  */
@@ -110,7 +125,6 @@ class DocsParser {
 	 * @param {Object} apis Hash map of Titanium type names and their definition.
 	 */
 	constructor(apis) {
-		this.globalNamespace = null;
 		this.apis = apis;
 		this.tree = new EmulatedSyntaxTree();
 	}
@@ -119,68 +133,81 @@ class DocsParser {
 	 * Parses all Titanium types and generates the emulated TypeScript syntax tree.
 	 */
 	parse() {
-		this.globalNamespace = new NamespaceNode(this.apis['Global']);
-		this.tree.addNode(this.globalNamespace);
-		this.tree.registerNamespace('Global', this.globalNamespace);
+		const globalNamespace = new NamespaceNode(this.apis['Global']);
+		this.tree.addNode(globalNamespace);
+		this.tree.registerNamespace('Global', globalNamespace);
 		delete this.apis['Global'];
 
-		const namesList = Object.keys(this.apis).sort();
+		const namesList = Object.keys(this.apis);
 		namesList.forEach(fullyQualifiedTypeName => {
 			if (fullyQualifiedTypeName.startsWith('__')) {
 				return;
 			}
 
 			const typeInfo = this.apis[fullyQualifiedTypeName];
-			if (typeInfo.__file.indexOf(path.join('apidoc', 'Modules')) !== -1) {
-				// skip bundled documentation for modules
-				return;
-			}
-			const namespaceParts = typeInfo.name.split('.');
-			namespaceParts.pop();
-			if (skipApis.includes(typeInfo.name)) {
-				return;
-			}
-
-			const parentNamespace = this.findOrCreateNamespace(namespaceParts);
-			const isModules = this.isModulesNamespace(typeInfo);
-			const isInterface = this.isInterface(typeInfo);
-			const isClass = this.isClass(typeInfo);
-			const isNamespace = this.isNamespace(typeInfo);
-			let processed = false;
-			let namespaceNode;
-			if (isNamespace || isModules) {
-				processed = true;
-				if (!this.tree.hasNamespace(typeInfo.name)) {
-					namespaceNode = new NamespaceNode(typeInfo);
-					this.tree.registerNamespace(namespaceNode.fullyQualifiedName, namespaceNode);
-					if (parentNamespace) {
-						parentNamespace.addNamespace(namespaceNode);
-					} else {
-						this.tree.addNode(namespaceNode);
-					}
-				}
-			}
-			if ((isInterface || isClass) && !isModules) {
-				processed = true;
-				if (namespaceNode && namespaceNode.fullyQualifiedName === 'Titanium') {
-					return;
-				}
-				const interfaceNode = isClass ? new ClassNode(typeInfo) : new InterfaceNode(typeInfo);
-				if (namespaceNode) {
-					namespaceNode.relatedNode = interfaceNode;
-					interfaceNode.relatedNode = namespaceNode;
-				}
-
-				if (parentNamespace) {
-					parentNamespace.addInterface(interfaceNode);
-				} else {
-					this.tree.addNode(interfaceNode);
-				}
-			}
-			if (!processed) {
-				console.warn(`Unhandled type ${typeInfo.name}`);
+			if (typeInfo) {
+				this.processApi(typeInfo);
 			}
 		});
+	}
+
+	/**
+	 * Creates {MemberNode} for type and places it in the tree.
+	 * Will return {NamespaceNode} if it was created.
+	 *
+	 * @param {Object} typeInfo API doc.
+	 * @return {NamespaceNode|undefined}
+	 */
+	processApi(typeInfo) {
+		if (typeInfo.__file.indexOf(path.join('apidoc', 'Modules')) !== -1) {
+			// skip bundled documentation for modules
+			return;
+		}
+		const namespaceParts = typeInfo.name.split('.');
+		namespaceParts.pop();
+		if (skipApis.includes(typeInfo.name)) {
+			return;
+		}
+
+		const parentNamespace = this.findOrCreateNamespace(namespaceParts);
+		const isInterface = this.isInterface(typeInfo);
+		const isClass = this.isClass(typeInfo);
+		const isNamespace = this.isNamespace(typeInfo);
+		let processed = false;
+		let namespaceNode;
+		if (isNamespace) {
+			processed = true;
+			if (!this.tree.hasNamespace(typeInfo.name)) {
+				namespaceNode = new NamespaceNode(typeInfo);
+				this.tree.registerNamespace(namespaceNode.fullyQualifiedName, namespaceNode);
+				if (parentNamespace) {
+					parentNamespace.addNamespace(namespaceNode);
+				} else {
+					this.tree.addNode(namespaceNode);
+				}
+			}
+		}
+		if (isInterface || isClass) {
+			processed = true;
+			if (namespaceNode && namespaceNode.fullyQualifiedName === 'Titanium') {
+				return namespaceNode;
+			}
+			const interfaceNode = isClass ? new ClassNode(typeInfo) : new InterfaceNode(typeInfo);
+			if (namespaceNode) {
+				namespaceNode.relatedNode = interfaceNode;
+				interfaceNode.relatedNode = namespaceNode;
+			}
+
+			if (parentNamespace) {
+				parentNamespace.addInterface(interfaceNode);
+			} else {
+				this.tree.addNode(interfaceNode);
+			}
+		}
+		if (!processed) {
+			console.warn(`Unhandled type ${typeInfo.name}`);
+		}
+		return namespaceNode;
 	}
 
 	/**
@@ -198,30 +225,11 @@ class DocsParser {
 		const parentNamespaceName = namespaceParts.join('.');
 		let parentNamespace = null;
 		if (!this.tree.hasNamespace(parentNamespaceName)) {
-			if (this.apis[parentNamespaceName]) {
-				parentNamespace = new NamespaceNode(this.apis[parentNamespaceName]);
-				this.tree.registerNamespace(parentNamespaceName, parentNamespace);
-				return parentNamespace;
+			if (!this.apis[parentNamespaceName]) {
+				throw new Error(`Couldn't find docs for "${parentNamespaceName}".`);
 			}
-			const namespacePathFromRoot = [];
-			let _parent = this.globalNamespace;
-			namespaceParts.shift();
-			namespaceParts.forEach(namespaceName => {
-				namespacePathFromRoot.push(namespaceName);
-				const subordinateNamespaceName = namespacePathFromRoot.join('.');
-				if (!this.tree.hasNamespace(subordinateNamespaceName)) {
-					const doc = this.apis[subordinateNamespaceName];
-					if (!doc) {
-						throw new Error(`Couldn't find docs for ${subordinateNamespaceName}.`);
-					}
-					const subordinateNamespace = new NamespaceNode(this.apis[subordinateNamespaceName]);
-					this.tree.registerNamespace(subordinateNamespace.fullyQualifiedName, subordinateNamespace);
-					_parent.addNamespace(subordinateNamespace);
-					_parent = subordinateNamespace;
-				} else {
-					parentNamespace = this.tree.getNamespace(subordinateNamespaceName);
-				}
-			});
+			parentNamespace = this.processApi(this.apis[parentNamespaceName]);
+			delete this.apis[parentNamespaceName];
 		} else {
 			parentNamespace = this.tree.getNamespace(parentNamespaceName);
 		}
@@ -248,7 +256,7 @@ class DocsParser {
 			'pseudo',
 		];
 
-		return validSubtypes.includes(typeInfo.__subtype) || knowInterfacesList.includes(typeInfo.name);
+		return validSubtypes.includes(typeInfo.__subtype) || forcedInterfaces.includes(typeInfo.name);
 	}
 
 	isClass(typeInfo) {
@@ -257,7 +265,7 @@ class DocsParser {
 			'proxy',
 			'view'
 		];
-		return validSubtypes.includes(typeInfo.__subtype) && !knowInterfacesList.includes(typeInfo.name);
+		return validSubtypes.includes(typeInfo.__subtype) && !forcedInterfaces.includes(typeInfo.name);
 	}
 
 	/**
@@ -270,11 +278,7 @@ class DocsParser {
 	 * @return {Boolean} True if the API type is considered a namespace in TypeScript, false if not.
 	 */
 	isNamespace(typeInfo) {
-		return (typeInfo.__subtype === 'module' || isConstantsOnlyProxy(typeInfo)) && !knowInterfacesList.includes(typeInfo.name);
-	}
-
-	isModulesNamespace(typeInfo) {
-		return typeInfo.name === 'Modules';
+		return (typeInfo.__subtype === 'module' || isConstantsOnlyProxy(typeInfo)) && !forcedInterfaces.includes(typeInfo.name);
 	}
 }
 
@@ -373,7 +377,7 @@ class GlobalTemplateWriter {
 	 * @param {Array<MemberNode>} nodes Syntax tree node to render and write
 	 */
 	writeNodes(nodes) {
-		const copy = nodes.slice();
+		const copy = nodes.slice().sort(sortByFQN);
 		while (copy.length) {
 			const node = copy.shift();
 			if (node instanceof InterfaceNode) {
@@ -442,10 +446,10 @@ class GlobalTemplateWriter {
 			namespaceNode.methods.forEach(methodNode => this.writeFunctionNode(methodNode, nextNestingLevel));
 		}
 		if (hasNamespaces) {
-			namespaceNode.namespaces.forEach(childNamespace => this.writeNamespaceNode(childNamespace, nextNestingLevel));
+			namespaceNode.namespaces.sort(sortByFQN).forEach(childNamespace => this.writeNamespaceNode(childNamespace, nextNestingLevel));
 		}
 		if (hasInterfaces) {
-			namespaceNode.interfaces.forEach(interfaceNode => this.writeInterfaceNode(interfaceNode, nextNestingLevel));
+			namespaceNode.interfaces.sort(sortByFQN).forEach(interfaceNode => this.writeInterfaceNode(interfaceNode, nextNestingLevel));
 		}
 		if (!isGlobal) {
 			this.output += `${this.indent(nestingLevel)}}\n`;
@@ -470,7 +474,8 @@ class GlobalTemplateWriter {
 			return;
 		}
 		const parent = interfaceNode.extends ? 'extends ' + interfaceNode.extends + ' ' : '';
-		this.output += `${this.indent(nestingLevel)}${interfaceNode.keyWord} ${interfaceNode.name} ${parent}{\n`;
+		const isTopLevelClass = this instanceof ClassNode && nestingLevel === 0 ? 'declare ' : '';
+		this.output += `${this.indent(nestingLevel)}${isTopLevelClass}${interfaceNode.keyWord} ${interfaceNode.name} ${parent}{\n`;
 		if (interfaceNode.properties.length > 0) {
 			interfaceNode.properties.forEach(propertyNode => this.writePropertyNode(propertyNode, nestingLevel + 1));
 		}
@@ -829,7 +834,7 @@ class MemberNode {
 	}
 
 	parseProperties(properties) {
-		if (!properties) {
+		if (!properties || !properties.length) {
 			return;
 		}
 
@@ -875,6 +880,10 @@ class MemberNode {
 			return false;
 		}
 
+		if (propertyDoc.__inherits && propertyDoc.__inherits !== this.fullyQualifiedName && !this.membersAreStatic) {
+			return false;
+		}
+
 		return true;
 	}
 
@@ -889,7 +898,11 @@ class MemberNode {
 			if (this.fullyQualifiedName === 'Titanium.Proxy' && /LifecycleContainer$/.test(methodDoc.name)) {
 				methodDoc.optional = true;
 			}
-			if (this.proxyEventMap && eventsMethodsList.includes(methodDoc.name)) {
+			const isEventMethod = eventsMethods.includes(methodDoc.name);
+			if (!isEventMethod && methodDoc.__inherits && methodDoc.__inherits !== this.fullyQualifiedName && !this.membersAreStatic) {
+				return;
+			}
+			if (this.proxyEventMap && isEventMethod) {
 				const parameters = [ {
 					name: 'name',
 					optional: false,
